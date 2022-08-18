@@ -117,7 +117,7 @@ impl CPU {
             match instruction {
                 // 0x00E0 - clr
                 (0x0, 0x0, 0xE, 0x0) => {
-                    self.clr00e0();
+                    self.cls00e0();
                 }
                 // 0x1nnn - jp
                 (0x1, nnn_a, nnn_b, nnn_c) => {
@@ -246,7 +246,7 @@ impl CPU {
     // ------------------------------------------------------------------
 
     /// Clear the display.
-    pub fn clr00e0(&mut self) {
+    pub fn cls00e0(&mut self) {
         self.clear();
     }
 
@@ -273,6 +273,99 @@ impl CPU {
     /// Display n-byte sprite starting at memory location I at (Vx, Vy), set VF =  collision.
     pub fn drwdxyn(&mut self, x: u8, y: u8, n: u8) {
         self.draw(x, y, n as usize);
+    }
+
+    /// Return from a subroutine.
+    pub fn ret00ee(&mut self) {
+        self.sp -= 1;
+        self.pc = self.stack[self.sp as usize];
+    }
+
+    /// Call subroutine at nnn.
+    pub fn call2nnn(&mut self, nnn: u16) {
+        self.sp += 1;
+        self.stack[self.sp as usize] = nnn;
+
+        self.pc = nnn;
+    }
+
+    /// Skip next instruction if Vx = nn.
+    pub fn se3xnn(&mut self, x: u8, nn: u8) {
+        if self.registers[x as usize] == nn {
+            self.pc += 2;
+        }
+    }
+
+    /// Skip next instruction if Vx != nn.
+    pub fn sne4xnn(&mut self, x: u8, nn: u8) {
+        if self.registers[x as usize] != nn {
+            self.pc += 2;
+        }
+    }
+
+    /// Skip next instruction if Vx = Vy.
+    pub fn se5xy0(&mut self, x: u8, y: u8) {
+        if self.registers[x as usize] == self.registers[y as usize] {
+            self.pc += 2;
+        }
+    }
+
+    /// Skip next instruction if Vx != Vy.
+    pub fn sne9xy0(&mut self, x: u8, y: u8) {
+        if self.registers[x as usize] != self.registers[y as usize] {
+            self.pc += 2;
+        }
+    }
+
+    /// Stores the value of register Vy in register Vx.
+    pub fn ld8xy0(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] = self.registers[y as usize];
+    }
+
+    /// Set Vx = Vx OR Vy.
+    pub fn or8xy1(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] = self.registers[x as usize] | self.registers[y as usize];
+    }
+
+    /// Set Vx = Vx AND Vy.
+    pub fn and8xy2(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] = self.registers[x as usize] & self.registers[y as usize];
+    }
+
+    /// Set Vx = Vx XOR Vy.
+    pub fn xor8xy3(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] = self.registers[x as usize] ^ self.registers[y as usize];
+    }
+
+    /// Set Vx = Vx + Vy, set VF = carry.
+    pub fn add8xy4(&mut self, x: u8, y: u8) {
+        // Set VF to 0
+        self.vf = 0;
+
+        // The sum casted into a u16
+        let sum = (self.registers[x as usize] + self.registers[y as usize]) as u16;
+
+        // If the sum overflows set VF to 1 and only write the first byte to Vx
+        if sum > 255 {
+            self.vf = 1;
+
+            self.registers[x as usize] = (sum & 0xFF) as u8;
+        } else {
+            self.registers[x as usize] = sum as u8;
+        }
+    }
+
+    /// Set Vx = Vx - Vy, set VF = NOT borrow.
+    pub fn sub8xy5(&mut self, x: u8, y: u8) {
+        let difference = self.registers[x as usize] as i16 - self.registers[y as usize] as i16;
+
+        if difference < 0 {
+            self.vf = 0;
+        } else {
+            self.vf = 1;
+        }
+
+        todo!()
     }
 }
 
