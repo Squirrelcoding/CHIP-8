@@ -1,4 +1,4 @@
-const WIDTH: u8 = 64;
+const USE_NEW_SHIFTING_CONVENTIONS: bool = false;
 
 pub const FONT: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -23,38 +23,44 @@ pub const FONT: [u8; 80] = [
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
     /// 4K of memory for the CHIP-8
-    mem: [u8; 4096],
+    pub mem: [u8; 4096],
 
     /// The program counter
-    pc: u16,
+    pub pc: u16,
 
     /// The 'I' register to store memory addresses
-    i_reg: u16,
+    pub i_reg: u16,
 
     /// The stack for the CHIP-8
-    stack: [u16; 16],
+    pub stack: [u16; 16],
 
     /// The registers for the CPU
-    registers: [u8; 16],
+    pub registers: [u8; 16],
 
     /// The stack pointer
-    sp: u8,
+    pub sp: u8,
 
     /// The delay timer
-    delay_timer: u8,
+    pub delay_timer: u8,
 
     /// The sound timer
-    sound_timer: u8,
+    pub sound_timer: u8,
 
     /// The VF register
-    vf: u8,
+    pub vf: u8,
 
     /// The display buffer
-    buf: [u8; 2048],
+    pub buf: [u8; 2048],
+
+    // Variables for helping with internals, not meant for instruction use.
+    pub last_st_write: u128,
+    pub last_dt_write: u128,
 }
 
 impl CPU {
     /// Initiate a new instance of the CPU struct
+
+    #[allow(dead_code)]
     pub fn new() -> Self {
         let mut mem: [u8; 4096] = [0; 4096];
 
@@ -72,6 +78,8 @@ impl CPU {
             sound_timer: 255,
             vf: 0,
             buf: [0; 2048],
+            last_st_write: 0,
+            last_dt_write: 0,
         }
     }
 
@@ -94,6 +102,8 @@ impl CPU {
             sound_timer: 255,
             vf: 0,
             buf: [0; 2048],
+            last_st_write: 0,
+            last_dt_write: 0,
         }
     }
 
@@ -126,22 +136,22 @@ impl CPU {
                 }
 
                 // 0x6xnn - set
-                (0x6, x, a, b) => {
-                    let val = (a << 4) | b;
-                    self.set6xnn(x, val);
+                (0x6, x, upper_nibble, lower_nibble) => {
+                    let nn = (upper_nibble << 4) | lower_nibble;
+                    self.set6xnn(x, nn);
                 }
 
                 // 0x7Xnn - add
-                (0x7, x, a, b) => {
-                    let val = (a << 4) | b;
-                    self.add7xnn(x, val);
+                (0x7, x, upper_nibble, lower_nibble) => {
+                    let nn = (upper_nibble << 4) | lower_nibble;
+                    self.add7xnn(x, nn);
                 }
 
                 // 0xAnnn - set
-                (0xA, a, b, c) => {
-                    let val = self.to_nnn(a, b, c);
+                (0xA, nnn_a, nnn_b, nnn_c) => {
+                    let nn = self.to_nnn(nnn_a, nnn_b, nnn_c);
 
-                    self.setannn(val);
+                    self.setannn(nn);
                 }
 
                 // 0xDxyn - draw
@@ -149,8 +159,116 @@ impl CPU {
                     self.drwdxyn(x, y, n);
                 }
 
-                (0x0, 0x0, 0x0, 0x0) => {
-                    break;
+                // 0x2nnn - call
+                (0x2, nnn_a, nnn_b, nnn_c) => {
+                    let addr = self.to_nnn(nnn_a, nnn_b, nnn_c);
+                    self.call2nnn(addr);
+                }
+
+                // 0x00EE - return
+                (0x0, 0x0, 0xE, 0xE) => {
+                    self.ret00ee();
+                }
+
+                // 0x3xnn - se
+                (0x3, x, upper_nibble, lower_nibble) => {
+                    let nn = (upper_nibble << 4) | lower_nibble;
+                    self.se3xnn(x, nn);
+                }
+
+                // 0x4xnn - sne
+                (0x4, x, upper_nibble, lower_nibble) => {
+                    let nn = (upper_nibble << 4) | lower_nibble;
+                    self.sne4xnn(x, nn);
+                }
+
+                // 0x5xy0 - se
+                (0x5, x, y, 0x0) => {
+                    self.se5xy0(x, y);
+                }
+
+                // 0x9xy0 - sne
+                (0x9, x, y, 0x0) => {
+                    self.sne9xy0(x, y);
+                }
+
+                // 0x8xy0 - ld
+                (0x8, x, y, 0x0) => {
+                    self.ld8xy0(x, y);
+                }
+
+                // 0x8xy1 - bitwise OR
+                (0x8, x, y, 0x1) => {
+                    self.or8xy1(x, y);
+                }
+
+                // 0x8xy2 - bitwise AND
+                (0x8, x, y, 0x2) => {
+                    self.and8xy2(x, y);
+                }
+
+                // 0x8xy3 - bitwise XOR
+                (0x8, x, y, 0x3) => {
+                    self.xor8xy3(x, y);
+                }
+
+                // 0x8xy4 - ADD
+                (0x8, x, y, 0x4) => {
+                    self.add8xy4(x, y);
+                }
+
+                // 0x8xy5 - SUB
+                (0x8, x, y, 0x5) => {
+                    self.sub8xy5(x, y);
+                }
+
+                // 0x8xy7 - SUB
+                (0x8, x, y, 0x7) => {
+                    self.sub8xy7(x, y);
+                }
+
+                // 0x8xy6 - shr
+                (0x8, x, y, 0x6) => match USE_NEW_SHIFTING_CONVENTIONS {
+                    true => {
+                        self.shr8xy6_usex(x, y);
+                    }
+                    false => {
+                        self.shr8xy6_usey(x, y);
+                    }
+                },
+
+                // 0x8xy6 - shr
+                (0x8, x, y, 0xE) => match USE_NEW_SHIFTING_CONVENTIONS {
+                    true => {
+                        self.shl8xye_usex(x, y);
+                    }
+                    false => {
+                        self.shl8xye_usey(x, y);
+                    }
+                },
+
+                (0xB, nnn_a, nnn_b, nnn_c) => {
+                    let nnn = self.to_nnn(nnn_a, nnn_b, nnn_c);
+
+                    self.jpbnnn(nnn);
+                }
+
+                (0xC, x, upper_nibble, lower_nibble) => {
+                    let nn = (upper_nibble << 4) | lower_nibble;
+
+                    self.rndcxnn(x, nn);
+                }
+
+                (0xF, x, 0x0, 0x7) => {
+                    self.ldfx07(x);
+                }
+
+                (0xF, x, 0x1, 0x5) => {
+                    self.ldfx15(x);
+                }
+
+                (0xF, x, 0x1, 0x8) => {
+                    self.ldfx18(x);
                 }
 
                 (a, b, c, d) => {
@@ -162,81 +280,12 @@ impl CPU {
     }
 
     // ------------------------------------------------------------------
-    //                            Display
-    // ------------------------------------------------------------------
-
-    /// Clears the display
-    pub fn clear(&mut self) {
-        self.buf.iter_mut().for_each(|i| *i = 0);
-        self.update();
-    }
-
-    pub fn update(&mut self) {
-        for (i, item) in self.buf.iter_mut().enumerate() {
-            if i != 0 && (i - 1) % (WIDTH as usize) == 0 {
-                println!();
-            }
-
-            if *item == 1 {
-                print!("#");
-            } else {
-                print!(" ");
-            }
-        }
-        println!();
-    }
-
-    pub fn draw(&mut self, x: u8, y: u8, n: usize) {
-        let x = self.registers[x as usize] % 64;
-        let y = self.registers[y as usize] % 32;
-        self.vf = 0;
-
-        let sprite = &self.mem[(self.i_reg as usize)..(self.i_reg as usize + n as usize)];
-
-        // Convert the coordinates to an index in the frame buffer
-        let mut pos_in_buf = x as usize + (WIDTH as usize * y as usize);
-
-        // Loop through each row in the sprite
-
-        sprite.iter().for_each(|byte_row| {
-            // This loop pushes the bits one by one to the right for each iteration,
-            // see if it's on or off (using the & 1) and then write it to the frame
-            // buffer
-            for j in (0..8).rev() {
-                // The current bit value, can be 1 or 0
-                let current_bit_value = (byte_row >> j) & 1;
-
-                // Set VF to 1 if the current bit is already on and the updated bit is also on.
-                // Also turn off the bit.
-                if (self.buf[pos_in_buf] == 1) && (current_bit_value == 1) {
-                    self.vf = 1;
-                    self.buf[pos_in_buf] = 0;
-                } else {
-                    // Just write to the display buffer by default.
-                    self.buf[pos_in_buf] = current_bit_value;
-                }
-
-                // If we reached the end of the screen, stop rendering the row
-                if (pos_in_buf % (WIDTH as usize)) == 0 {
-                    break;
-                }
-
-                // Incrementing X coordinate
-                pos_in_buf += 1;
-            }
-
-            // Incrementing Y coordinate
-            pos_in_buf += (WIDTH - 8) as usize;
-        });
-    }
-
-    // ------------------------------------------------------------------
     //                         Helper functions
     // ------------------------------------------------------------------
 
     pub fn to_nnn(&self, a: u8, b: u8, c: u8) -> u16 {
-        let byte = ((a << 4) | b) as u16;
-        let byte = (byte << 4) | c as u16;
+        let mut byte = ((a << 4) | b) as u16;
+        byte = (byte << 4) | c as u16;
 
         byte
     }
@@ -244,129 +293,6 @@ impl CPU {
     // ------------------------------------------------------------------
     //                          Instructions
     // ------------------------------------------------------------------
-
-    /// Clear the display.
-    pub fn cls00e0(&mut self) {
-        self.clear();
-    }
-
-    /// Jump to location nnn.   
-    pub fn jp1nnn(&mut self, nnn: u16) {
-        self.pc = nnn;
-    }
-
-    /// Set Vx = nn.
-    pub fn set6xnn(&mut self, x: u8, nn: u8) {
-        self.registers[x as usize] = nn;
-    }
-
-    /// Set Vx = Vx + nn.
-    pub fn add7xnn(&mut self, x: u8, nn: u8) {
-        self.registers[x as usize] += nn;
-    }
-
-    /// Set I = nnn.
-    pub fn setannn(&mut self, nnn: u16) {
-        self.i_reg = nnn;
-    }
-
-    /// Display n-byte sprite starting at memory location I at (Vx, Vy), set VF =  collision.
-    pub fn drwdxyn(&mut self, x: u8, y: u8, n: u8) {
-        self.draw(x, y, n as usize);
-    }
-
-    /// Return from a subroutine.
-    pub fn ret00ee(&mut self) {
-        self.sp -= 1;
-        self.pc = self.stack[self.sp as usize];
-    }
-
-    /// Call subroutine at nnn.
-    pub fn call2nnn(&mut self, nnn: u16) {
-        self.sp += 1;
-        self.stack[self.sp as usize] = nnn;
-
-        self.pc = nnn;
-    }
-
-    /// Skip next instruction if Vx = nn.
-    pub fn se3xnn(&mut self, x: u8, nn: u8) {
-        if self.registers[x as usize] == nn {
-            self.pc += 2;
-        }
-    }
-
-    /// Skip next instruction if Vx != nn.
-    pub fn sne4xnn(&mut self, x: u8, nn: u8) {
-        if self.registers[x as usize] != nn {
-            self.pc += 2;
-        }
-    }
-
-    /// Skip next instruction if Vx = Vy.
-    pub fn se5xy0(&mut self, x: u8, y: u8) {
-        if self.registers[x as usize] == self.registers[y as usize] {
-            self.pc += 2;
-        }
-    }
-
-    /// Skip next instruction if Vx != Vy.
-    pub fn sne9xy0(&mut self, x: u8, y: u8) {
-        if self.registers[x as usize] != self.registers[y as usize] {
-            self.pc += 2;
-        }
-    }
-
-    /// Stores the value of register Vy in register Vx.
-    pub fn ld8xy0(&mut self, x: u8, y: u8) {
-        self.registers[x as usize] = self.registers[y as usize];
-    }
-
-    /// Set Vx = Vx OR Vy.
-    pub fn or8xy1(&mut self, x: u8, y: u8) {
-        self.registers[x as usize] = self.registers[x as usize] | self.registers[y as usize];
-    }
-
-    /// Set Vx = Vx AND Vy.
-    pub fn and8xy2(&mut self, x: u8, y: u8) {
-        self.registers[x as usize] = self.registers[x as usize] & self.registers[y as usize];
-    }
-
-    /// Set Vx = Vx XOR Vy.
-    pub fn xor8xy3(&mut self, x: u8, y: u8) {
-        self.registers[x as usize] = self.registers[x as usize] ^ self.registers[y as usize];
-    }
-
-    /// Set Vx = Vx + Vy, set VF = carry.
-    pub fn add8xy4(&mut self, x: u8, y: u8) {
-        // Set VF to 0
-        self.vf = 0;
-
-        // The sum casted into a u16
-        let sum = (self.registers[x as usize] + self.registers[y as usize]) as u16;
-
-        // If the sum overflows set VF to 1 and only write the first byte to Vx
-        if sum > 255 {
-            self.vf = 1;
-
-            self.registers[x as usize] = (sum & 0xFF) as u8;
-        } else {
-            self.registers[x as usize] = sum as u8;
-        }
-    }
-
-    /// Set Vx = Vx - Vy, set VF = NOT borrow.
-    pub fn sub8xy5(&mut self, x: u8, y: u8) {
-        let difference = self.registers[x as usize] as i16 - self.registers[y as usize] as i16;
-
-        if difference < 0 {
-            self.vf = 0;
-        } else {
-            self.vf = 1;
-        }
-
-        todo!()
-    }
 }
 
 #[cfg(test)]
@@ -462,5 +388,221 @@ mod tests {
         cpu.setannn(arbitrary_value);
 
         assert_eq!(cpu.i_reg, arbitrary_value);
+    }
+
+    #[test]
+    fn test_call2nnn() {
+        let mut cpu = new_cpu();
+
+        let arbitrary_address = 500;
+
+        cpu.call2nnn(arbitrary_address);
+
+        assert_eq!(cpu.sp, 1);
+        assert_eq!(cpu.pc, arbitrary_address);
+        assert_eq!(cpu.stack[cpu.sp as usize], arbitrary_address);
+    }
+
+    #[test]
+    fn test_se3xnn() {
+        let mut cpu = new_cpu();
+
+        let arbitrary_value = 69;
+
+        cpu.set6xnn(0, arbitrary_value);
+
+        // Set the PC to a random address
+        cpu.pc = 500;
+
+        // This should increment cpu.pc by 2.
+        cpu.se3xnn(0, arbitrary_value);
+
+        assert_eq!(cpu.pc, 502);
+    }
+
+    #[test]
+    fn call_and_return_subroutine() {
+        let mut cpu = new_cpu();
+
+        let arbitrary_subroutine_address = 500;
+
+        cpu.call2nnn(arbitrary_subroutine_address);
+        cpu.ret00ee();
+
+        assert_eq!(cpu.sp, 0);
+    }
+
+    #[test]
+    fn test_sne4xnn() {
+        let mut cpu = new_cpu();
+
+        let arbitrary_value = 69;
+
+        cpu.set6xnn(0, arbitrary_value);
+
+        // Set the PC to a random address
+        cpu.pc = 500;
+
+        // This should increment cpu.pc by 2.
+        cpu.sne4xnn(0, 42);
+
+        assert_eq!(cpu.pc, 502);
+    }
+
+    #[test]
+    fn test_se5xy0() {
+        let mut cpu = new_cpu();
+
+        let x_val = 69;
+        let y_val = 69;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.pc = 500;
+
+        cpu.se5xy0(0, 1);
+
+        assert_eq!(cpu.pc, 502);
+    }
+
+    #[test]
+    fn test_sne9xy0() {
+        let mut cpu = new_cpu();
+
+        let x_val = 69;
+        let y_val = 42;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.pc = 500;
+
+        cpu.sne9xy0(0, 1);
+
+        assert_eq!(cpu.pc, 502);
+    }
+
+    #[test]
+    fn test_ld8xy0() {
+        let mut cpu = new_cpu();
+
+        let x_val = 69;
+        let y_val = 42;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.ld8xy0(0, 1);
+
+        assert_eq!(cpu.registers[0], cpu.registers[1])
+    }
+
+    #[test]
+    fn test_or8xy1() {
+        let mut cpu = new_cpu();
+
+        let x_val = 0b1000101;
+        let y_val = 0b101010;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.or8xy1(0, 1);
+
+        assert_eq!(cpu.registers[0], x_val | y_val);
+    }
+
+    #[test]
+    fn test_and8xy2() {
+        let mut cpu = new_cpu();
+
+        let x_val = 0b1000101;
+        let y_val = 0b101010;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.and8xy2(0, 1);
+
+        assert_eq!(cpu.registers[0], x_val & y_val);
+    }
+
+    #[test]
+    fn test_xor8xy3() {
+        let mut cpu = new_cpu();
+
+        let x_val = 0b1000101;
+        let y_val = 0b101010;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.xor8xy3(0, 1);
+
+        assert_eq!(cpu.registers[0], x_val ^ y_val);
+    }
+
+    #[test]
+    fn test_add8xy4_without_overflow() {
+        let mut cpu = new_cpu();
+
+        let x_val = 10;
+        let y_val = 10;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.add8xy4(0, 1);
+
+        assert_eq!(cpu.vf, 0);
+        assert_eq!(cpu.registers[0], 20);
+    }
+
+    #[test]
+    fn test_add8xy4_with_overflow() {
+        let mut cpu = new_cpu();
+
+        let x_val = 255;
+        let y_val = 255;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.add8xy4(0, 1);
+
+        assert_eq!(cpu.vf, 1);
+    }
+
+    #[test]
+    fn test_sub8xy5_without_underflow() {
+        let mut cpu = new_cpu();
+
+        let x_val = 50;
+        let y_val = 25;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.sub8xy5(0, 1);
+
+        assert_eq!(cpu.vf, 1);
+        assert_eq!(cpu.registers[0], 25);
+    }
+
+    #[test]
+    fn test_sub8xy5_with_underflow() {
+        let mut cpu = new_cpu();
+
+        let x_val = 25;
+        let y_val = 50;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.sub8xy5(0, 1);
+
+        assert_eq!(cpu.vf, 0);
+        assert_eq!(cpu.registers[0], 231);
     }
 }
