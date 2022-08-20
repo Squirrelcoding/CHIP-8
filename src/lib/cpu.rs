@@ -247,28 +247,57 @@ impl CPU {
                     }
                 },
 
+                // 0xBnnn - jp
                 (0xB, nnn_a, nnn_b, nnn_c) => {
                     let nnn = self.to_nnn(nnn_a, nnn_b, nnn_c);
 
                     self.jpbnnn(nnn);
                 }
 
+                // 0xCxnn - rnd
                 (0xC, x, upper_nibble, lower_nibble) => {
                     let nn = (upper_nibble << 4) | lower_nibble;
 
                     self.rndcxnn(x, nn);
                 }
 
+                // 0xFx07 - ldf
                 (0xF, x, 0x0, 0x7) => {
                     self.ldfx07(x);
                 }
 
+                // 0xFx15 - ld
                 (0xF, x, 0x1, 0x5) => {
                     self.ldfx15(x);
                 }
 
+                // 0xFx18 - ld
                 (0xF, x, 0x1, 0x8) => {
                     self.ldfx18(x);
+                }
+
+                // 0xFx1E - add
+                (0xF, x, 0x1, 0xE) => {
+                    self.addfx1e(x);
+                }
+
+                // 0xFx29 - ld
+                (0xF, x, 0x2, 0x9) => {
+                    self.ldfx29(x);
+                }
+
+                // 0xFx33 - ld
+                (0xF, x, 0x3, 0x3) => {
+                    self.ldfx33(x);
+                }
+
+                // 0xFx55 - ld
+                (0xF, x, 0x5, 0x5) => {
+                    self.ldfx55(x);
+                }
+
+                (0xF, x, 0x6, 0x5) => {
+                    self.ldfx65(x);
                 }
 
                 (a, b, c, d) => {
@@ -279,25 +308,20 @@ impl CPU {
         }
     }
 
-    // ------------------------------------------------------------------
-    //                         Helper functions
-    // ------------------------------------------------------------------
-
+    /// A helper function to convert 8 nibbles into one u16 value
     pub fn to_nnn(&self, a: u8, b: u8, c: u8) -> u16 {
         let mut byte = ((a << 4) | b) as u16;
         byte = (byte << 4) | c as u16;
 
         byte
     }
-
-    // ------------------------------------------------------------------
-    //                          Instructions
-    // ------------------------------------------------------------------
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::{Duration, SystemTime};
 
     fn new_cpu() -> CPU {
         CPU::new()
@@ -604,5 +628,228 @@ mod tests {
 
         assert_eq!(cpu.vf, 0);
         assert_eq!(cpu.registers[0], 231);
+    }
+
+    #[test]
+    fn test_sub8xy7_without_underflow() {
+        let mut cpu = new_cpu();
+
+        let x_val = 25;
+        let y_val = 50;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.sub8xy7(0, 1);
+
+        assert_eq!(cpu.vf, 1);
+        assert_eq!(cpu.registers[0], 25);
+    }
+
+    #[test]
+    fn test_sub8xy7_with_underflow() {
+        let mut cpu = new_cpu();
+
+        let x_val = 50;
+        let y_val = 25;
+
+        cpu.set6xnn(0, x_val);
+        cpu.set6xnn(1, y_val);
+
+        cpu.sub8xy7(0, 1);
+
+        assert_eq!(cpu.vf, 0);
+        assert_eq!(cpu.registers[0], 231);
+    }
+
+    #[test]
+    fn test_shr8xy6_usey() {
+        let mut cpu = new_cpu();
+
+        let byte = 0b1000101;
+
+        cpu.set6xnn(1, byte);
+
+        cpu.shr8xy6_usey(0, 1);
+
+        assert_eq!(cpu.registers[0], byte >> 1);
+        assert_eq!(cpu.vf, 1);
+    }
+
+    #[test]
+    fn test_shr8xy6_usex() {
+        let mut cpu = new_cpu();
+
+        let byte = 0b1000101;
+
+        cpu.set6xnn(0, byte);
+
+        cpu.shr8xy6_usey(0, 0);
+
+        assert_eq!(cpu.registers[0], byte >> 1);
+        assert_eq!(cpu.vf, 1);
+    }
+
+    #[test]
+    fn test_shl8xye_usey() {
+        let mut cpu = new_cpu();
+
+        let byte = 0b1000_1010;
+
+        cpu.set6xnn(1, byte);
+
+        cpu.shl8xye_usey(0, 1);
+
+        assert_eq!(cpu.registers[0], byte << 1);
+        assert_eq!(cpu.vf, 1);
+    }
+
+    #[test]
+    fn test_shl8xye_usex() {
+        let mut cpu = new_cpu();
+
+        let byte = 0b1000_1010;
+
+        cpu.set6xnn(0, byte);
+
+        cpu.shl8xye_usex(0, 0);
+
+        assert_eq!(cpu.registers[0], byte << 1);
+        assert_eq!(cpu.vf, 1);
+    }
+
+    #[test]
+    fn test_jpbnnn() {
+        let mut cpu = new_cpu();
+
+        cpu.jp1nnn(1024);
+        cpu.set6xnn(0, 255);
+
+        cpu.jpbnnn(1024);
+
+        assert_eq!(cpu.pc, 1279)
+    }
+
+    #[test]
+    fn test_delay_instructions() {
+        let mut cpu = new_cpu();
+
+        cpu.set6xnn(0, 69);
+        cpu.ldfx15(0);
+        let time = SystemTime::now();
+        thread::sleep(Duration::from_millis(20));
+        cpu.ldfx07(0);
+        assert_eq!(time.elapsed().unwrap().as_millis() as u8, cpu.registers[0]);
+    }
+
+    #[test]
+    fn test_addfx1e() {
+        let mut cpu = new_cpu();
+
+        cpu.setannn(500);
+        cpu.set6xnn(0, 255);
+
+        cpu.addfx1e(0);
+
+        assert_eq!(755, cpu.i_reg);
+    }
+
+    #[test]
+    fn test_ldfx29() {
+        let mut cpu = new_cpu();
+
+        cpu.set6xnn(0, 0x0);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50);
+
+        cpu.set6xnn(0, 0x1);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 5);
+
+        cpu.set6xnn(0, 0x2);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 10);
+
+        cpu.set6xnn(0, 0x3);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 15);
+
+        cpu.set6xnn(0, 0x4);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 20);
+
+        cpu.set6xnn(0, 0x5);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 25);
+
+        cpu.set6xnn(0, 0x6);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 30);
+
+        cpu.set6xnn(0, 0x7);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 35);
+
+        cpu.set6xnn(0, 0x8);
+        cpu.ldfx29(0);
+        assert_eq!(cpu.i_reg, 0x50 + 40);
+    }
+
+    #[test]
+    fn test_ldfx33() {
+        let mut cpu = new_cpu();
+
+        cpu.set6xnn(0, 123);
+
+        cpu.i_reg = 1024;
+        cpu.ldfx33(0);
+
+        assert_eq!(cpu.mem[1024], 1);
+        assert_eq!(cpu.mem[1025], 2);
+        assert_eq!(cpu.mem[1026], 3);
+    }
+
+    #[test]
+    fn test_ldfx55() {
+        let mut cpu = new_cpu();
+
+        cpu.set6xnn(0, 0);
+        cpu.set6xnn(1, 1);
+        cpu.set6xnn(2, 2);
+        cpu.set6xnn(3, 3);
+        cpu.set6xnn(4, 4);
+        cpu.set6xnn(5, 5);
+
+        cpu.i_reg = 1024;
+        cpu.ldfx55(5);
+
+        assert_eq!(cpu.mem[1024], 0);
+        assert_eq!(cpu.mem[1025], 1);
+        assert_eq!(cpu.mem[1026], 2);
+        assert_eq!(cpu.mem[1027], 3);
+        assert_eq!(cpu.mem[1028], 4);
+        assert_eq!(cpu.mem[1029], 5);
+    }
+
+    #[test]
+    fn test_ldfx65() {
+        let mut cpu = new_cpu();
+
+        cpu.mem[1024] = 0;
+        cpu.mem[1025] = 1;
+        cpu.mem[1026] = 2;
+        cpu.mem[1027] = 3;
+        cpu.mem[1028] = 4;
+        cpu.mem[1029] = 5;
+
+        cpu.i_reg = 1024;
+        cpu.ldfx65(5);
+
+        assert_eq!(cpu.registers[0], 0);
+        assert_eq!(cpu.registers[1], 1);
+        assert_eq!(cpu.registers[2], 2);
+        assert_eq!(cpu.registers[3], 3);
+        assert_eq!(cpu.registers[4], 4);
+        assert_eq!(cpu.registers[5], 5);
     }
 }

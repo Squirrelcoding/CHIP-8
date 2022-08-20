@@ -162,7 +162,7 @@ impl CPU {
 
     /// Set Vx = Vy SHL 1, set VF = shifted bit
     pub fn shl8xye_usey(&mut self, x: u8, y: u8) {
-        // Get the last bit using an if/else statement
+        // Get the last bit by checking if the byte is greater than 127
         let last_bit = if self.registers[y as usize] > 127 {
             1
         } else {
@@ -178,7 +178,7 @@ impl CPU {
 
     /// Set Vx = Vx SHL 1, set VF = shifted bit
     pub fn shl8xye_usex(&mut self, x: u8, _y: u8) {
-        // Get the last bit using an if/else statement
+        // Get the last bit by checking if the byte is greater than 127
         let last_bit = if self.registers[x as usize] > 127 {
             1
         } else {
@@ -193,7 +193,7 @@ impl CPU {
 
     /// Jump to location nnn + V0.
     pub fn jpbnnn(&mut self, nnn: u16) {
-        self.pc = (self.registers[0] as u16) + nnn;
+        self.pc = nnn + (self.registers[0] as u16);
     }
 
     /// Set Vx = random byte AND kk.
@@ -242,5 +242,67 @@ impl CPU {
     pub fn ldfx18(&mut self, x: u8) {
         self.last_st_write = std::time::SystemTime::now().elapsed().unwrap().as_millis();
         self.sound_timer = x;
+    }
+
+    /// Set I = I + Vx.
+    pub fn addfx1e(&mut self, x: u8) {
+        self.i_reg += self.registers[x as usize] as u16;
+    }
+
+    /// Set I = location of sprite for digit Vx.
+    pub fn ldfx29(&mut self, x: u8) {
+        self.i_reg = 0x50
+            + match self.registers[x as usize] {
+                0x0 => 0,
+                0x1 => 5,
+                0x2 => 10,
+                0x3 => 15,
+                0x4 => 20,
+                0x5 => 25,
+                0x6 => 30,
+                0x7 => 35,
+                0x8 => 40,
+                0x9 => 45,
+                0xA => 50,
+                0xB => 55,
+                0xC => 60,
+                0xD => 65,
+                0xE => 70,
+                0xF => 75,
+                _ => 0,
+            }
+    }
+
+    /// Store BCD representation of Vx in memory locations I, I+1, and I+2.
+    pub fn ldfx33(&mut self, x: u8) {
+        let num = self.registers[x as usize];
+
+        let mut digits: [u8; 3] = [0; 3];
+
+        let num = num.to_string();
+
+        for (i, char) in num.chars().enumerate() {
+            digits[i] = char.to_digit(10).unwrap() as u8;
+        }
+
+        println!("{digits:?}");
+
+        self.mem[self.i_reg as usize] = digits[0];
+        self.mem[self.i_reg as usize + 1] = digits[1];
+        self.mem[self.i_reg as usize + 2] = digits[2];
+    }
+
+    /// Store registers V0 through Vx in memory starting at location I.
+    pub fn ldfx55(&mut self, x: u8) {
+        for i in 0..(x + 1) {
+            self.mem[(self.i_reg + i as u16) as usize] = self.registers[i as usize];
+        }
+    }
+
+    /// Read registers V0 through Vx from memory starting at location I.
+    pub fn ldfx65(&mut self, x: u8) {
+        for i in 0..(x + 1) {
+            self.registers[i as usize] = self.mem[(self.i_reg + i as u16) as usize];
+        }
     }
 }
